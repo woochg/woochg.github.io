@@ -1,5 +1,5 @@
 /* =============================================================================
- * ArmBioZ Hydration Dashboard  v0.1.1   (Web Bluetooth PWA)
+ * ArmBioZ Hydration Dashboard  v0.1.2   (Web Bluetooth PWA)
  * -----------------------------------------------------------------------------
  * Device protocol (see design/DESIGN_v0.1.1.md ch.7, ch.15):
  *   Service      4b1c0100-5a1e-4b1c-9f3e-8d2c6a7b0e41
@@ -15,7 +15,7 @@
  * ===========================================================================*/
 'use strict';
 
-const APP_VERSION = '0.1.1';
+const APP_VERSION = '0.1.2';
 const UUID = (x) => `4b1c${x}-5a1e-4b1c-9f3e-8d2c6a7b0e41`;
 const SVC = UUID('0100');
 const CH = {
@@ -36,7 +36,7 @@ const STORAGE_NAMES = ['?', 'INTERNAL', 'QSPI', 'RAM!'];
 // Event marker codes (firmware Record.h record_event::*)
 const EVENT_NAMES = {
   1: 'SESSION START', 2: 'SESSION STOP', 3: 'SESSION RESUME', 4: 'AUTO STOP (USB)',
-  5: 'AUTO STOP (battery)', 6: 'BASELINE RESET',
+  5: 'AUTO STOP (battery)', 6: 'BASELINE RESET', 7: 'SESSION END (reset)',
 };
 // User marks: code sent with MARK, stored as 100 + code
 const USER_EVENTS = [
@@ -48,7 +48,7 @@ const eventName = (code) => (code >= 100
   : EVENT_NAMES[code] || `EVENT ${code}`);
 const LEAD_NAMES = ['OK', 'OFF', 'SUSPECT'];
 const ALARM_NAMES = ['none', 'WARN', 'ALERT'];
-const RESET_NAMES = ['power-on', 'pin', 'WATCHDOG', 'soft', 'LOCKUP', 'wake', 'other'];
+const RESET_NAMES = ['power-on', 'pin', 'WATCHDOG', 'soft/upload', 'LOCKUP', 'wake', 'other', 'VBUS-wake'];
 const PWR_NAMES = ['normal', 'warn', 'CRITICAL', 'SHUTDOWN'];
 const MEDIAN_WIN_S = 300;
 
@@ -603,7 +603,7 @@ function renderSession() {
   $('btnStop').disabled = !linked || !supported || !active;
   document.querySelectorAll('.evbtn').forEach((b) => { b.disabled = !linked || !supported; });
   $('sessHint').textContent = !s ? '' : (s.usbInhibit && s.usb) ? 'USB 전원 연결 중: 측정 금지 설정으로 시작할 수 없습니다.'
-    : active ? '연결을 끊어도 측정·기록은 계속됩니다.' : 'Start를 누르면 새 세션(기준값 Z₀ 재설정, 30분 안정화)이 시작됩니다.';
+    : active ? '연결을 끊어도 측정·기록은 계속됩니다. (전원 재투입·리셋 시에는 정지)' : 'Start를 누르면 새 세션(기준값 Z₀ 재설정, 30분 안정화)이 시작됩니다. 전원을 넣거나 리셋하면 항상 대기(IDLE) 상태입니다.';
 }
 
 function renderLive(row) {

@@ -1,6 +1,9 @@
-/* ArmBioZ service worker — offline app shell (cache-first, versioned).
- * Bump CACHE when any shell file changes so phones pick up the new build. */
-const CACHE = 'armbioz-v0.1.1';
+/* ArmBioZ service worker v0.1.2 — offline app shell.
+ * Strategy: NETWORK-FIRST for the app's own files, cache as offline fallback.
+ * A new GitHub Pages deploy is picked up on the next page load without
+ * clearing browser data (v0.1.1 used cache-first, which kept old builds).
+ * Still bump CACHE on release so stale offline copies are dropped. */
+const CACHE = 'armbioz-v0.1.2';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest',
                'icons/icon-192.png', 'icons/icon-512.png'];
 
@@ -15,6 +18,17 @@ self.addEventListener('activate', (e) => {
 });
 
 self.addEventListener('fetch', (e) => {
-  if (e.request.method !== 'GET') return;
-  e.respondWith(caches.match(e.request).then((hit) => hit || fetch(e.request)));
+  const req = e.request;
+  if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
+  e.respondWith(
+    fetch(req, { cache: 'no-cache' })            // revalidate with the server
+      .then((res) => {
+        if (res.ok) {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(req, copy));
+        }
+        return res;
+      })
+      .catch(() => caches.match(req).then((hit) => hit || caches.match('index.html'))),
+  );
 });
