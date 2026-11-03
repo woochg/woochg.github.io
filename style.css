@@ -1,0 +1,107 @@
+/* ArmBioZ Hydration Dashboard v0.1.0 — mobile-first, light/dark */
+:root {
+  --bg: #f4f6f5;
+  --card: #ffffff;
+  --ink: #17201f;
+  --muted: #5d6b69;
+  --line: #dde3e1;
+  --accent: #0f6e6a;
+  --accent-ink: #ffffff;
+  --warn: #b26a00;
+  --warn-bg: #fff4e0;
+  --alert: #b3261e;
+  --alert-bg: #fde8e7;
+  --ok: #1e7d4c;
+  --plot-line: #0f6e6a;
+  --plot-median: #0b3d3b;
+  --plot-grey: #a9b3b1;
+  --radius: 14px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1413;
+    --card: #161e1d;
+    --ink: #e6eeec;
+    --muted: #93a3a0;
+    --line: #2a3533;
+    --accent: #3fb8b0;
+    --accent-ink: #062321;
+    --warn: #f0b04a;
+    --warn-bg: #33270f;
+    --alert: #ff8a80;
+    --alert-bg: #3a1716;
+    --ok: #6fd39c;
+    --plot-line: #3fb8b0;
+    --plot-median: #b8f1ec;
+    --plot-grey: #4c5856;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); }
+body {
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", "Noto Sans KR", Roboto, sans-serif;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+h1 { font-size: 1.05rem; margin: 0; letter-spacing: .01em; }
+h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 .6rem; }
+.sub { margin: 0; font-size: .78rem; color: var(--muted); }
+.topbar {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; justify-content: space-between;
+  padding: .7rem 16px; background: var(--card); border-bottom: 1px solid var(--line);
+}
+.brand { display: flex; align-items: center; gap: .6rem; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--plot-grey); flex: none; }
+.dot.on { background: var(--ok); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 25%, transparent); }
+.dot.busy { background: var(--warn); }
+.actions, .row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+.row.between { justify-content: space-between; }
+main { max-width: 980px; margin: 0 auto; padding: 12px 16px; display: grid; gap: 12px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; }
+button {
+  font: inherit; font-size: .88rem; padding: .5rem .85rem; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer;
+  min-height: 40px;
+}
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+button.ghost { background: transparent; }
+button.danger { color: var(--alert); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button:not(:disabled):active { transform: translateY(1px); }
+.kv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: .5rem .9rem; }
+.kv { display: flex; flex-direction: column; border-left: 3px solid var(--line); padding-left: .55rem; }
+.kv span { font-size: .72rem; color: var(--muted); }
+.kv b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.meta { color: var(--muted); font-size: .8rem; margin: .6rem 0; }
+.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: .5rem; margin-bottom: .7rem; }
+.metric { background: var(--bg); border-radius: 10px; padding: .45rem .6rem; }
+.metric span { display: block; font-size: .72rem; color: var(--muted); }
+.metric b { font-size: 1.25rem; font-variant-numeric: tabular-nums; }
+.metric i { font-style: normal; color: var(--muted); font-size: .75rem; margin-left: .15rem; }
+.tabs { margin-bottom: .4rem; }
+.tab { min-height: 32px; padding: .25rem .7rem; }
+.tab.active { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.plot { margin: .4rem 0 .8rem; }
+.plot canvas { width: 100%; display: block; background: var(--bg); border-radius: 10px; }
+.plot figcaption { font-size: .72rem; color: var(--muted); margin-top: .25rem; }
+.banner { border-radius: 12px; padding: .7rem .9rem; font-weight: 600; }
+.banner.warn { background: var(--warn-bg); color: var(--warn); }
+.banner.alert { background: var(--alert-bg); color: var(--alert); }
+.progress { position: relative; height: 22px; background: var(--bg); border-radius: 8px; overflow: hidden; margin-bottom: .6rem; }
+.progress div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+.progress span { position: absolute; inset: 0; display: grid; place-items: center; font-size: .75rem; }
+details { margin-top: .8rem; }
+summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
+.form label { display: flex; flex-direction: column; font-size: .78rem; color: var(--muted); }
+.form input { font: inherit; padding: .4rem .5rem; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); width: 140px; }
+.log {
+  margin: 0; max-height: 240px; overflow: auto; background: var(--bg); border-radius: 10px; padding: .6rem;
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-word;
+}
+footer { text-align: center; color: var(--muted); font-size: .72rem; padding: 12px 16px 24px; }
+@media (max-width: 420px) {
+  .actions { width: 100%; }
+  .actions button { flex: 1; }
+}
