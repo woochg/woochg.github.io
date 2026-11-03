@@ -1,6 +1,6 @@
 /* ArmBioZ service worker — offline app shell (cache-first, versioned).
  * Bump CACHE when any shell file changes so phones pick up the new build. */
-const CACHE = 'armbioz-v0.1.0';
+const CACHE = 'armbioz-v0.1.1';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest',
                'icons/icon-192.png', 'icons/icon-512.png'];
 

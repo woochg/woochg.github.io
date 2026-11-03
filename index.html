@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  ArmBioZ Hydration Dashboard  v0.1.0
+  ArmBioZ Hydration Dashboard  v0.1.1
   Web Bluetooth PWA for the XIAO nRF52840 Plus + MAX30002 arm bioimpedance
   logger (PNAS 2025 reproduction). Hosted on GitHub Pages (HTTPS required).
 -->
@@ -22,7 +22,7 @@
       <span class="dot" id="connDot" aria-hidden="true"></span>
       <div>
         <h1>ArmBioZ Hydration</h1>
-        <p class="sub" id="devName">연결 안 됨 · v0.1.0</p>
+        <p class="sub" id="devName">연결 안 됨 · v0.1.1</p>
       </div>
     </div>
     <div class="actions">
@@ -37,6 +37,21 @@
       이 브라우저는 Web Bluetooth를 지원하지 않습니다. Android Chrome 또는 데스크톱 Chrome/Edge에서 HTTPS로 여세요. (iOS Safari 미지원)
     </div>
     <div id="alarmBanner" class="banner" hidden></div>
+
+    <!-- ===== SESSION (v0.1.1) ===== -->
+    <section class="card session" id="sessCard" aria-labelledby="hSess">
+      <div class="row between">
+        <h2 id="hSess">Session</h2>
+        <b id="sessState" class="sess-state">—</b>
+      </div>
+      <div class="row">
+        <button id="btnStart" class="primary big" disabled>▶ Start</button>
+        <button id="btnStop" class="big danger" disabled>■ Stop</button>
+      </div>
+      <p class="meta" id="sessHint"></p>
+      <p class="meta label">이벤트 기록 (그래프·CSV에 표시)</p>
+      <div class="row" id="evButtons"></div>
+    </section>
 
     <!-- ===== STATUS ===== -->
     <section class="card" aria-labelledby="hStatus">
@@ -54,7 +69,7 @@
       <p class="meta" id="stMeta"></p>
       <div class="row">
         <button id="btnLed" disabled>LED on/off</button>
-        <button id="btnBaseline" disabled>Reset baseline (재착용)</button>
+        <button id="btnBaseline" disabled>Reset baseline (재착용·세션 유지)</button>
       </div>
     </section>
 
@@ -77,7 +92,7 @@
       </div>
       <figure class="plot">
         <canvas id="cvTime" height="220" aria-label="|Z| time series"></canvas>
-        <figcaption>|Z|(t) · 5-min median (굵은 선) · 회색 = settling/lead-off</figcaption>
+        <figcaption>|Z|(t) · 5-min median (굵은 선) · 회색 = settling/lead-off · 세로선 = 세션(실선)/이벤트(점선) · 주황 점선 = Z₀</figcaption>
       </figure>
       <figure class="plot">
         <canvas id="cvBiva" height="240" aria-label="R–Xc plot"></canvas>
@@ -94,7 +109,7 @@
         <button id="btnSync" disabled class="primary">Sync now</button>
         <button id="btnCsv">Download CSV</button>
         <button id="btnJson">Download JSON</button>
-        <button id="btnPc" disabled title="v0.1.0: 전송 방식 미정 (USB / Wi-Fi / 클라우드 / 사내 서버)">Send to PC</button>
+        <button id="btnPc" disabled title="전송 방식 미정 (USB / Wi-Fi / 클라우드 / 사내 서버)">Send to PC</button>
         <button id="btnClear" class="ghost danger">Clear local</button>
       </div>
       <details>
@@ -117,7 +132,7 @@
     </section>
   </main>
 
-  <footer>ArmBioZ v0.1.0 · Research POC, not a medical device · PNAS 122(29) e2504278122 reproduction</footer>
+  <footer>ArmBioZ v0.1.1 · Research POC, not a medical device · PNAS 122(29) e2504278122 reproduction</footer>
   <script src="app.js"></script>
 </body>
 </html>

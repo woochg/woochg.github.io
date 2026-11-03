@@ -1,4 +1,4 @@
-/* ArmBioZ Hydration Dashboard v0.1.0 — mobile-first, light/dark */
+/* ArmBioZ Hydration Dashboard v0.1.1 — mobile-first, light/dark */
 :root {
   --bg: #f4f6f5;
   --card: #ffffff;
@@ -105,3 +105,12 @@ footer { text-align: center; color: var(--muted); font-size: .72rem; padding: 12
   .actions { width: 100%; }
   .actions button { flex: 1; }
 }
+
+/* ---- v0.1.1 session card ---- */
+.session { border-left: 5px solid var(--line); }
+.session.live { border-left-color: var(--ok); }
+.sess-state { font-variant-numeric: tabular-nums; }
+.session.live .sess-state { color: var(--ok); }
+button.big { min-height: 48px; min-width: 120px; font-size: 1rem; font-weight: 600; }
+.meta.label { margin: .8rem 0 .4rem; }
+.evbtn { min-height: 36px; padding: .3rem .7rem; }

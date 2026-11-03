@@ -1,20 +1,21 @@
 /* =============================================================================
- * ArmBioZ Hydration Dashboard  v0.1.0   (Web Bluetooth PWA)
+ * ArmBioZ Hydration Dashboard  v0.1.1   (Web Bluetooth PWA)
  * -----------------------------------------------------------------------------
- * Device protocol (see design/DESIGN_v0.1.0.md ch.7):
+ * Device protocol (see design/DESIGN_v0.1.1.md ch.7, ch.15):
  *   Service      4b1c0100-5a1e-4b1c-9f3e-8d2c6a7b0e41
- *   0101 Status       read/notify 20 B
+ *   0101 Status       read/notify 24 B (v0.1.1: + session id/active)
  *   0102 Live         notify      20 B record
  *   0103 SyncInfo     read/notify 20 B
  *   0104 DataWindow   notify      DATA [D1][n][idx u16] + n*20 B  |  END 20 B
  *   0105 ControlPoint write       [op][args...]
  * Record (20 B LE): seq u32, time u32, R f32, Xc f32, flags u8, boot u8, crc16
+ * Event markers (v0.1.1): R = NaN, Xc = event code (session start/stop…)
  * Integrity: CRC-16/CCITT-FALSE per record, CRC-32 (zlib) over a burst.
  * Storage: IndexedDB 'armbioz' / 'records' keyed [dev, seq] (upsert = no dupes)
  * ===========================================================================*/
 'use strict';
 
-const APP_VERSION = '0.1.0';
+const APP_VERSION = '0.1.1';
 const UUID = (x) => `4b1c${x}-5a1e-4b1c-9f3e-8d2c6a7b0e41`;
 const SVC = UUID('0100');
 const CH = {
@@ -24,12 +25,27 @@ const CH = {
 const OP = {
   ACK: 0x01, NACK: 0x02, START: 0x10, ABORT: 0x11, READ_RANGE: 0x12,
   SET_TIME: 0x20, RESET_BASELINE: 0x30, SET_LED: 0x40,
+  SESSION_START: 0x50, SESSION_STOP: 0x51, MARK: 0x52,
 };
 const FLAG = {
   TIME_VALID: 1, SIMULATED: 2, LEAD_OFF: 4, SETTLING: 8,
   RANGE: 16, LOW_BATT: 32, WARN: 64, ALERT: 128,
 };
-const STATE_NAMES = ['BOOT', 'WAIT_LEAD', 'SETTLING', 'RUN', 'LOW_BATT', 'FAULT'];
+const STATE_NAMES = ['BOOT', 'WAIT_LEAD', 'SETTLING', 'RUN', 'LOW_BATT', 'FAULT', 'IDLE'];
+const STORAGE_NAMES = ['?', 'INTERNAL', 'QSPI', 'RAM!'];
+// Event marker codes (firmware Record.h record_event::*)
+const EVENT_NAMES = {
+  1: 'SESSION START', 2: 'SESSION STOP', 3: 'SESSION RESUME', 4: 'AUTO STOP (USB)',
+  5: 'AUTO STOP (battery)', 6: 'BASELINE RESET',
+};
+// User marks: code sent with MARK, stored as 100 + code
+const USER_EVENTS = [
+  [1, '💧 음수'], [2, '🍽 식사'], [3, '🚻 소변'], [4, '🏃 운동'],
+  [5, '😴 수면'], [6, '☀ 기상'], [7, '🚿 샤워'], [9, '📌 기타'],
+];
+const eventName = (code) => (code >= 100
+  ? (USER_EVENTS.find(([c]) => c === code - 100) || [0, `USER ${code - 100}`])[1]
+  : EVENT_NAMES[code] || `EVENT ${code}`);
 const LEAD_NAMES = ['OK', 'OFF', 'SUSPECT'];
 const ALARM_NAMES = ['none', 'WARN', 'ALERT'];
 const RESET_NAMES = ['power-on', 'pin', 'WATCHDOG', 'soft', 'LOCKUP', 'wake', 'other'];
@@ -183,10 +199,11 @@ function toRow(rec) {
     const upNow = S.status.uptime + (Date.now() - S.status.rxMs) / 1000;
     t = Math.round(nowEpoch() - (upNow - rec.time));
   }
-  const { z, phi } = derive(rec);
+  const ev = Number.isNaN(rec.r) ? Math.round(rec.xc) : 0;   // marker record
+  const { z, phi } = ev ? { z: NaN, phi: NaN } : derive(rec);
   return {
     dev: S.dev, seq: rec.seq, t, rawTime: rec.time, r: rec.r, xc: rec.xc,
-    z, phi, flags: rec.flags, boot: rec.boot,
+    z, phi, flags: rec.flags, boot: rec.boot, ev,
   };
 }
 
@@ -199,6 +216,11 @@ function onStatus(dv) {
     uptime: dv.getUint32(10, true), lost: dv.getUint32(14, true),
     flags: dv.getUint8(18), power: dv.getUint8(19), rxMs: Date.now(),
     boot: S.syncInfo ? S.syncInfo.boot : (S.status ? S.status.boot : 0),
+    session: dv.byteLength >= 24 ? dv.getUint16(20, true) : 0,
+    sessionActive: dv.byteLength >= 24 ? !!(dv.getUint8(22) & 1) : null,
+    usb: dv.byteLength >= 24 ? !!(dv.getUint8(22) & 2) : false,
+    usbInhibit: dv.byteLength >= 24 ? !!(dv.getUint8(22) & 4) : false,
+    storage: dv.byteLength >= 24 ? dv.getUint8(23) : 0,
   };
   const prev = S.status;
   S.status = s;
@@ -206,7 +228,13 @@ function onStatus(dv) {
   if (!prev || prev.alarm !== s.alarm) {
     if (s.alarm) log(`ALARM ${ALARM_NAMES[s.alarm]}`, 'warn');
   }
-  if (!prev) log(`fw ${s.fw}, reset=${RESET_NAMES[s.reset] || s.reset}`);
+  if (!prev) {
+    log(`fw ${s.fw}, reset=${RESET_NAMES[s.reset] || s.reset}`);
+    if (s.sessionActive === null) log('firmware < v0.1.1: 세션 기능 없음 → 펌웨어 업데이트 필요', 'warn');
+  }
+  if (prev && prev.sessionActive !== s.sessionActive && s.sessionActive !== null) {
+    log(`session #${s.session} ${s.sessionActive ? 'ACTIVE' : 'stopped'}`);
+  }
   S.ledOn = !!(s.flags & 64);
   renderStatus();
 }
@@ -226,7 +254,8 @@ async function onLive(dv) {
   const { rec } = parseRecord(u8);
   if (!rec.crcOk) { log('live record CRC error', 'warn'); return; }
   const row = toRow(rec);
-  renderLive(row);
+  if (row.ev) log(`event #${rec.seq}: ${eventName(row.ev)}`);
+  else renderLive(row);
   if (rec.seq > 0 && S.dev) {          // seq 0 = not stored on device
     await DB.putMany([row]);
     upsertRow(row);
@@ -363,10 +392,20 @@ class DemoLink {
   constructor() {
     this.boot = 1; this.uptime0 = Date.now(); this.epochValid = false; this.epochOff = 0;
     this.head = 0; this.ack = 0; this.store = []; this.r = 120; this.xc = 25; this.led = true;
-    this.state = 1; this.okRun = 0; this.lastSync = 0;
-    // 2 h backlog recorded before "connection" (uptime-stamped)
+    this.state = 1; this.okRun = 0; this.lastSync = 0; this.session = 1; this.active = true;
+    // 2 h backlog of session #1 recorded before "connection" (uptime-stamped)
+    this.marker(1, 0);
     for (let i = 0; i < 1440; i++) this.measure(i * 5);
+    this.marker(103, 3600);                // a 'urination' mark in the backlog
   }
+  marker(code, tUp) {
+    let f = FLAG.SIMULATED; let time = tUp;
+    if (this.epochValid) { f |= FLAG.TIME_VALID; time = this.epochOff + tUp; }
+    const rec = { seq: ++this.head, time, r: NaN, xc: code, flags: f, boot: this.boot };
+    this.store.push(rec);
+    return rec;
+  }
+  emit(rec) { onLive(this.dv(encodeRecord(rec))).catch(() => {}); }
   uptimeS() { return Math.floor((Date.now() - this.uptime0) / 1000) + 7200; }
   measure(tUp) {
     const g = () => { let s = 0; for (let i = 0; i < 6; i++) s += Math.random(); return (s - 3) / Math.sqrt(0.5); };
@@ -384,11 +423,11 @@ class DemoLink {
   }
   dv(u8) { return new DataView(u8.buffer, u8.byteOffset, u8.byteLength); }
   statusBytes() {
-    const u8 = new Uint8Array(20); const d = this.dv(u8);
-    d.setUint16(0, 3920, true); u8[2] = 78; u8[3] = this.state; u8[4] = 0; u8[5] = 0; u8[6] = 0;
+    const u8 = new Uint8Array(24); const d = this.dv(u8);
+    d.setUint16(0, 3920, true); u8[2] = 78; u8[3] = this.active ? this.state : 6; u8[4] = 0; u8[5] = 0; u8[6] = 0;
     u8[7] = 0; u8[8] = 1; u8[9] = 0; d.setUint32(10, this.uptimeS(), true); d.setUint32(14, 0, true);
     u8[18] = 4 | 8 | 32 | (this.led ? 64 : 0) | (this.epochValid ? 2 : 0) | (this.ack > 0 ? 16 : 0);
-    u8[19] = 0;
+    u8[19] = 0; d.setUint16(20, this.session, true); u8[22] = this.active ? 1 : 0; u8[23] = 1;
     return this.dv(u8);
   }
   syncBytes() {
@@ -403,8 +442,7 @@ class DemoLink {
     onSyncInfo(this.syncBytes());
     onStatus(this.statusBytes());
     this.timer = setInterval(() => {      // 5 s cycle accelerated to 1 s
-      const rec = this.measure(this.uptimeS());
-      onLive(this.dv(encodeRecord(rec))).catch(() => {});
+      if (this.active) this.emit(this.measure(this.uptimeS()));
       onStatus(this.statusBytes());
       onSyncInfo(this.syncBytes());
     }, 1000);
@@ -440,7 +478,14 @@ class DemoLink {
         setTimeout(() => onSyncInfo(this.syncBytes()), 20); break;
       case OP.SET_TIME: this.epochValid = true; this.epochOff = d.getUint32(1, true) - this.uptimeS(); break;
       case OP.SET_LED: this.led = !!bytes[1]; break;
-      case OP.RESET_BASELINE: this.state = 2; break;
+      case OP.RESET_BASELINE: this.state = 2; this.emit(this.marker(6, this.uptimeS())); break;
+      case OP.SESSION_START:
+        if (!this.active) { this.session++; this.active = true; this.state = 1; this.okRun = 0; this.emit(this.marker(1, this.uptimeS())); }
+        setTimeout(() => onStatus(this.statusBytes()), 20); break;
+      case OP.SESSION_STOP:
+        if (this.active) { this.emit(this.marker(2, this.uptimeS())); this.active = false; }
+        setTimeout(() => onStatus(this.statusBytes()), 20); break;
+      case OP.MARK: this.emit(this.marker(100 + bytes[1], this.uptimeS())); break;
       default: break;
     }
   }
@@ -458,6 +503,7 @@ async function connect(demo) {
     $('devName').textContent = `${name} · v${APP_VERSION}`;
     $('connDot').classList.add('on');
     for (const id of ['btnDisconnect', 'btnSync', 'btnLed', 'btnBaseline']) $(id).disabled = false;
+    renderSession();
     $('btnConnect').disabled = true; $('btnDemo').disabled = true;
     log(`connected: ${name}${demo ? ' (demo)' : ''}`);
     if (!demo) {
@@ -481,6 +527,7 @@ function onDisconnected() {
   $('connDot').classList.remove('on', 'busy');
   for (const id of ['btnDisconnect', 'btnSync', 'btnLed', 'btnBaseline']) $(id).disabled = true;
   $('btnConnect').disabled = !navigator.bluetooth; $('btnDemo').disabled = false;
+  renderSession();
 }
 
 /* ------------------------------------------------------------ data access */
@@ -499,14 +546,23 @@ function upsertRow(row) {
   }
   a.splice(lo, 0, row);
 }
-const usable = (r) => !(r.flags & (FLAG.LEAD_OFF | FLAG.SETTLING)) && Number.isFinite(r.z);
+const usable = (r) => !r.ev && !(r.flags & (FLAG.LEAD_OFF | FLAG.SETTLING)) && Number.isFinite(r.z);
 function median(v) {
   if (!v.length) return NaN;
   const s = [...v].sort((a, b) => a - b); const m = s.length >> 1;
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
+function sessionStartIndex() {   // last START / RESUME / BASELINE RESET
+  for (let i = S.rows.length - 1; i >= 0; i--) {
+    const e = S.rows[i].ev;
+    if (e === 1 || e === 3 || e === 6) return i;
+  }
+  return 0;
+}
 function baselineZ0() {         // 5-min median right after settling (Eq.2)
-  const first = S.rows.findIndex(usable);
+  const s0 = sessionStartIndex();
+  const rel = S.rows.slice(s0).findIndex(usable);
+  const first = rel < 0 ? -1 : s0 + rel;
   if (first < 0) return NaN;
   return median(S.rows.slice(first, first + 60).filter(usable).map((r) => r.z));
 }
@@ -520,7 +576,7 @@ function renderStatus() {
     $('stAlarm').textContent = ALARM_NAMES[s.alarm] || s.alarm;
     $('stBatt').textContent = (s.flags & 128) ? 'USB / n.a.' : `${(s.vbat / 1000).toFixed(2)} V · ${s.soc}% ${s.flags & 1 ? '⚡' : ''}`;
     $('stUptime').textContent = `${Math.floor(s.uptime / 3600)} h ${Math.floor((s.uptime % 3600) / 60)} m`;
-    $('stSource').textContent = `${s.flags & 4 ? 'SIMULATED' : 'MAX30002'} · ${s.flags & 8 ? 'QSPI' : 'RAM!'}`;
+    $('stSource').textContent = `${s.flags & 4 ? 'SIMULATED' : 'MAX30002'} · ${s.storage ? STORAGE_NAMES[s.storage] : (s.flags & 8 ? 'FLASH' : 'RAM!')}`;
     $('stMeta').textContent = `fw ${s.fw} · reset ${RESET_NAMES[s.reset] || s.reset} · power ${PWR_NAMES[s.power] || s.power} · lost ${s.lost} · baseline ${s.flags & 16 ? 'set' : '—'} · write ${s.flags & 32 ? 'on' : 'OFF'}`;
     const b = $('alarmBanner');
     if (s.alarm === 2) { b.className = 'banner alert'; b.textContent = 'ALERT: |Z| ≥ 1.20 × 기준 — 탈수 의심 (잠정 임계치, 비임상)'; b.hidden = false; }
@@ -528,10 +584,26 @@ function renderStatus() {
     else if (s.power >= 2) { b.className = 'banner alert'; b.textContent = '배터리 저전압: 플래시 기록 중단됨'; b.hidden = false; }
     else b.hidden = true;
   }
+  renderSession();
   if (y) {
     $('stUnsynced').textContent = `${y.unsynced}  (head #${y.head})`;
     $('stLastSync').textContent = y.lastSync ? ymdhms(new Date(y.lastSync * 1000)) : '—';
   }
+}
+
+function renderSession() {
+  const s = S.status;
+  const linked = !!S.link;
+  const supported = s && s.sessionActive !== null;
+  const active = !!(s && s.sessionActive);
+  $('sessState').textContent = !s ? '—' : !supported ? '미지원 (fw v0.1.0)'
+    : active ? `#${s.session} 측정 중 · ${STATE_NAMES[s.state] || s.state}` : `정지 (마지막 #${s.session})`;
+  $('sessCard').classList.toggle('live', active);
+  $('btnStart').disabled = !linked || !supported || active || (s.usbInhibit && s.usb);
+  $('btnStop').disabled = !linked || !supported || !active;
+  document.querySelectorAll('.evbtn').forEach((b) => { b.disabled = !linked || !supported; });
+  $('sessHint').textContent = !s ? '' : (s.usbInhibit && s.usb) ? 'USB 전원 연결 중: 측정 금지 설정으로 시작할 수 없습니다.'
+    : active ? '연결을 끊어도 측정·기록은 계속됩니다.' : 'Start를 누르면 새 세션(기준값 Z₀ 재설정, 30분 안정화)이 시작됩니다.';
 }
 
 function renderLive(row) {
@@ -609,6 +681,20 @@ function renderPlots() {
       g.strokeStyle = css('--plot-median'); g.lineWidth = 2; g.beginPath();
       med.forEach(([x, y], i) => (i ? g.lineTo(X(x), Y(y)) : g.moveTo(X(x), Y(y))));
       g.stroke();
+      // event markers (vertical lines + short labels)
+      const tEnd = xs[xs.length - 1], tStart = xs[0];
+      const marks = S.rows.filter((r) => r.ev && tx(r) >= tStart && tx(r) <= tEnd);
+      g.font = '10px system-ui'; g.textAlign = 'left'; g.textBaseline = 'top';
+      marks.slice(-40).forEach((r, i) => {
+        const x = X(tx(r));
+        const sys = r.ev < 100;
+        g.strokeStyle = sys ? css('--accent') : css('--warn'); g.lineWidth = 1;
+        g.setLineDash(sys ? [] : [2, 3]);
+        g.beginPath(); g.moveTo(x, pad.t); g.lineTo(x, h - pad.b); g.stroke();
+        g.setLineDash([]);
+        g.fillStyle = g.strokeStyle;
+        g.fillText(eventName(r.ev).replace('SESSION ', ''), x + 2, pad.t + (i % 3) * 11);
+      });
       const z0 = baselineZ0();
       if (Number.isFinite(z0) && z0 > y0 && z0 < y1) {
         g.setLineDash([4, 4]); g.strokeStyle = css('--warn'); g.lineWidth = 1;
@@ -649,11 +735,12 @@ function download(name, text, type) {
 }
 async function exportCsv() {
   const rows = await DB.getAll(null);
-  const head = 'device,seq,epoch_s,iso_time,time_valid,raw_time,boot,R_ohm,Xc_ohm,Z_ohm,phase_deg,flags_hex,settling,lead_off,simulated';
+  const head = 'device,seq,epoch_s,iso_time,time_valid,raw_time,boot,event_code,event,R_ohm,Xc_ohm,Z_ohm,phase_deg,flags_hex,settling,lead_off,simulated';
   const lines = rows.map((r) => [
     r.dev, r.seq, r.t ?? '', r.t != null ? new Date(r.t * 1000).toISOString() : '',
-    r.flags & FLAG.TIME_VALID ? 1 : 0, r.rawTime, r.boot, r.r.toFixed(4), r.xc.toFixed(4),
-    r.z.toFixed(4), r.phi.toFixed(3), `0x${r.flags.toString(16).padStart(2, '0')}`,
+    r.flags & FLAG.TIME_VALID ? 1 : 0, r.rawTime, r.boot, r.ev || '', r.ev ? `"${eventName(r.ev)}"` : '',
+    r.ev ? '' : r.r.toFixed(4), r.ev ? '' : r.xc.toFixed(4),
+    r.ev ? '' : r.z.toFixed(4), r.ev ? '' : r.phi.toFixed(3), `0x${r.flags.toString(16).padStart(2, '0')}`,
     r.flags & FLAG.SETTLING ? 1 : 0, r.flags & FLAG.LEAD_OFF ? 1 : 0, r.flags & FLAG.SIMULATED ? 1 : 0,
   ].join(','));
   download(`armbioz_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '')}.csv`, [head, ...lines].join('\n'), 'text/csv');
@@ -677,6 +764,22 @@ function bind() {
     if (!confirm('재착용으로 기준값(Z₀)을 다시 잡습니까? 장치는 settling부터 다시 시작합니다.')) return;
     await S.link.write([OP.RESET_BASELINE]); log('baseline reset requested');
   };
+  $('btnStart').onclick = async () => {
+    await S.link.write([OP.SESSION_START]);
+    log('session START requested');
+  };
+  $('btnStop').onclick = async () => {
+    if (!confirm('측정 세션을 종료합니까? 전류 주입이 멈추고 기록이 중단됩니다.')) return;
+    await S.link.write([OP.SESSION_STOP]);
+    log('session STOP requested');
+  };
+  const ev = $('evButtons');
+  USER_EVENTS.forEach(([code, label]) => {
+    const b = document.createElement('button');
+    b.className = 'evbtn ghost'; b.textContent = label; b.disabled = true;
+    b.onclick = async () => { await S.link.write([OP.MARK, code]); };
+    ev.appendChild(b);
+  });
   $('btnCsv').onclick = () => exportCsv().catch((e) => log(e.message, 'err'));
   $('btnJson').onclick = () => exportJson().catch((e) => log(e.message, 'err'));
   $('btnClear').onclick = async () => {
