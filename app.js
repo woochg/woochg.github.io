@@ -1,5 +1,7 @@
 /* =============================================================================
- * ArmBioZ Hydration Dashboard  v0.1.2   (Web Bluetooth PWA)
+ * ArmBioZ Hydration Dashboard  v0.1.3   (Web Bluetooth PWA)
+ * Version shown in the header: PWA version (this file) + firmware version
+ * reported by the device in Status[7..9].
  * -----------------------------------------------------------------------------
  * Device protocol (see design/DESIGN_v0.1.1.md ch.7, ch.15):
  *   Service      4b1c0100-5a1e-4b1c-9f3e-8d2c6a7b0e41
@@ -15,7 +17,7 @@
  * ===========================================================================*/
 'use strict';
 
-const APP_VERSION = '0.1.2';
+const APP_VERSION = '0.1.3';
 const UUID = (x) => `4b1c${x}-5a1e-4b1c-9f3e-8d2c6a7b0e41`;
 const SVC = UUID('0100');
 const CH = {
@@ -236,6 +238,7 @@ function onStatus(dv) {
     log(`session #${s.session} ${s.sessionActive ? 'ACTIVE' : 'stopped'}`);
   }
   S.ledOn = !!(s.flags & 64);
+  renderHeader();
   renderStatus();
 }
 
@@ -425,7 +428,7 @@ class DemoLink {
   statusBytes() {
     const u8 = new Uint8Array(24); const d = this.dv(u8);
     d.setUint16(0, 3920, true); u8[2] = 78; u8[3] = this.active ? this.state : 6; u8[4] = 0; u8[5] = 0; u8[6] = 0;
-    u8[7] = 0; u8[8] = 1; u8[9] = 0; d.setUint32(10, this.uptimeS(), true); d.setUint32(14, 0, true);
+    u8[7] = 0; u8[8] = 1; u8[9] = 3;   // demo emulates fw 0.1.3 d.setUint32(10, this.uptimeS(), true); d.setUint32(14, 0, true);
     u8[18] = 4 | 8 | 32 | (this.led ? 64 : 0) | (this.epochValid ? 2 : 0) | (this.ack > 0 ? 16 : 0);
     u8[19] = 0; d.setUint16(20, this.session, true); u8[22] = this.active ? 1 : 0; u8[23] = 1;
     return this.dv(u8);
@@ -500,7 +503,7 @@ async function connect(demo) {
     S.link = link;
     S.dev = name;
     store.set('armbioz.dev', name);
-    $('devName').textContent = `${name} · v${APP_VERSION}`;
+    renderHeader();
     $('connDot').classList.add('on');
     for (const id of ['btnDisconnect', 'btnSync', 'btnLed', 'btnBaseline']) $(id).disabled = false;
     renderSession();
@@ -527,6 +530,7 @@ function onDisconnected() {
   $('connDot').classList.remove('on', 'busy');
   for (const id of ['btnDisconnect', 'btnSync', 'btnLed', 'btnBaseline']) $(id).disabled = true;
   $('btnConnect').disabled = !navigator.bluetooth; $('btnDemo').disabled = false;
+  renderHeader();
   renderSession();
 }
 
@@ -589,6 +593,13 @@ function renderStatus() {
     $('stUnsynced').textContent = `${y.unsynced}  (head #${y.head})`;
     $('stLastSync').textContent = y.lastSync ? ymdhms(new Date(y.lastSync * 1000)) : '—';
   }
+}
+
+function renderHeader() {
+  const fw = S.status ? ` · FW v${S.status.fw}` : '';
+  $('devName').textContent = S.link
+    ? `${S.dev} · PWA v${APP_VERSION}${fw}` : `연결 안 됨 · PWA v${APP_VERSION}`;
+  $('footVer').textContent = `PWA v${APP_VERSION}${fw}`;
 }
 
 function renderSession() {
@@ -810,6 +821,7 @@ function bind() {
 
 async function main() {
   bind();
+  renderHeader();
   if (!navigator.bluetooth) { $('unsupported').hidden = false; $('btnConnect').disabled = true; }
   try { await DB.open(); } catch (e) { log(`IndexedDB unavailable: ${e.message}`, 'err'); }
   await loadRows();
