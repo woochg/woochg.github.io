@@ -1,5 +1,5 @@
 /* =============================================================================
- * ArmBioZ Hydration Dashboard  v0.1.6   (Web Bluetooth PWA)
+ * ArmBioZ Hydration Dashboard  v0.1.7   (Web Bluetooth PWA)
  * Version shown in the header: PWA version (this file) + firmware version
  * reported by the device in Status[7..9].
  * -----------------------------------------------------------------------------
@@ -17,7 +17,7 @@
  * ===========================================================================*/
 'use strict';
 
-const APP_VERSION = '0.1.6';
+const APP_VERSION = '0.1.7';
 const UUID = (x) => `4b1c${x}-5a1e-4b1c-9f3e-8d2c6a7b0e41`;
 const SVC = UUID('0100');
 const CH = {
@@ -53,6 +53,10 @@ const ALARM_NAMES = ['none', 'WARN', 'ALERT'];
 const RESET_NAMES = ['power-on', 'pin', 'WATCHDOG', 'soft/upload', 'LOCKUP', 'wake', 'other', 'VBUS-wake'];
 const PWR_NAMES = ['normal', 'warn', 'CRITICAL', 'SHUTDOWN'];
 const MEDIAN_WIN_S = 300;
+// Auto-sync while connected (v0.1.7): live records are stored locally but the
+// device only advances its ACK pointer after a sync burst.
+const AUTO_SYNC_MIN_RECORDS = 60;        // ~5 min of data
+const AUTO_SYNC_MIN_GAP_MS  = 60000;
 
 /* ---------------------------------------------------------------- utilities */
 // localStorage may be missing or throw (private mode, blocked site data).
@@ -185,6 +189,7 @@ const S = {
   rows: [],              // records of current device (sorted by seq)
   winS: 3600,
   scope: store.get('armbioz.scope') || 'session',   // 'session' | 'all'
+  lastAutoSync: 0,
   ledOn: true,
   sync: null,            // {buf, crc, tries, expectEnd}
   armCirc: parseFloat(store.get('armbioz.armCirc')) || NaN,
@@ -251,6 +256,16 @@ function onSyncInfo(dv) {
   };
   if (S.status) S.status.boot = S.syncInfo.boot;
   renderStatus();
+  maybeAutoSync();
+}
+
+function maybeAutoSync() {
+  const y = S.syncInfo;
+  if (!S.link || !S.ready || S.sync || S.syncStarting || !y || y.unsynced < AUTO_SYNC_MIN_RECORDS) return;
+  if (Date.now() - S.lastAutoSync < AUTO_SYNC_MIN_GAP_MS) return;
+  S.lastAutoSync = Date.now();
+  log(`auto-sync: ${y.unsynced} records pending`);
+  startSync().catch((e) => log(`auto-sync error: ${e.message}`, 'err'));
 }
 
 async function onLive(dv) {
@@ -333,8 +348,11 @@ function endSync() {
 const u32 = (v) => [v & 0xff, (v >>> 8) & 0xff, (v >>> 16) & 0xff, (v >>> 24) & 0xff];
 
 async function startSync() {
-  if (!S.link || S.sync) return;
-  const info = await S.link.readSyncInfo();
+  if (!S.link || S.sync || S.syncStarting) return;   // one burst at a time
+  S.syncStarting = true;
+  let info;
+  try { info = await S.link.readSyncInfo(); } finally { S.syncStarting = false; }
+  if (S.sync) return;
   if (info) onSyncInfo(info);
   const expect = S.syncInfo ? S.syncInfo.unsynced : 0;
   S.sync = { buf: [], kept: [], crc: 0, bad: false, firstBad: null, tries: 0, expect, t0: Date.now() };
@@ -429,7 +447,7 @@ class DemoLink {
   statusBytes() {
     const u8 = new Uint8Array(24); const d = this.dv(u8);
     d.setUint16(0, 3920, true); u8[2] = 78; u8[3] = this.active ? this.state : 6; u8[4] = 0; u8[5] = 0; u8[6] = 0;
-    u8[7] = 0; u8[8] = 1; u8[9] = 6;   // demo emulates fw 0.1.6 d.setUint32(10, this.uptimeS(), true); d.setUint32(14, 0, true);
+    u8[7] = 0; u8[8] = 1; u8[9] = 7;   // demo emulates fw 0.1.7 d.setUint32(10, this.uptimeS(), true); d.setUint32(14, 0, true);
     u8[18] = 4 | 8 | 32 | (this.led ? 64 : 0) | (this.epochValid ? 2 : 0) | (this.active && this.state === 3 ? 16 : 0);
     u8[19] = 0; d.setUint16(20, this.session, true); u8[22] = this.active ? 1 : 0; u8[23] = 1;
     return this.dv(u8);
@@ -518,6 +536,7 @@ async function connect(demo) {
     log('time synchronised');
     await loadRows();
     if (S.syncInfo && S.syncInfo.unsynced > 0) await startSync();   // auto high-speed sync
+    S.ready = true;                                                   // enables periodic auto-sync
   } catch (e) {
     log(`connect failed: ${e.message}`, 'err');
     S.link = null;
@@ -525,6 +544,7 @@ async function connect(demo) {
 }
 
 function onDisconnected() {
+  S.ready = false;
   log('disconnected', 'warn');
   if (S.sync) endSync();
   S.link = null;
@@ -656,9 +676,10 @@ function axes(g, w, h, pad, x0, x1, y0, y1, xfmt, yfmt) {
     g.beginPath(); g.moveTo(pad.l, y); g.lineTo(w - pad.r, y); g.stroke();
     g.fillText(yfmt(v), pad.l - 4, y);
   }
-  g.textAlign = 'center'; g.textBaseline = 'top';
+  g.textBaseline = 'top';
   for (let i = 0; i <= 3; i++) {
     const v = x0 + (x1 - x0) * i / 3; const x = pad.l + (w - pad.l - pad.r) * i / 3;
+    g.textAlign = i === 0 ? 'left' : i === 3 ? 'right' : 'center';   // no clipping
     g.fillText(xfmt(v), x, h - pad.b + 4);
   }
 }
@@ -671,18 +692,26 @@ function padRange(a, b, minSpan) {   // margin + minimum span, centred
 }
 
 function renderPlots() {
-  const base = S.scope === 'session' ? sessionRows() : S.rows;
-  const rows = base.filter((r) => Number.isFinite(r.z));
-  const untimed = rows.filter((r) => r.t == null).length;
-  $('plotNote').textContent = `${S.scope === 'session' ? '현재 세션' : '전체'} · ${rows.length.toLocaleString()}개`
-    + (untimed ? ` · 시각 미확정 ${untimed}개는 시계열에서 제외` : '');
+  const scoped = S.scope === 'session' ? sessionRows() : S.rows;
+  // Real-sensor device: hide simulator records (and vice versa) - v0.1.7
+  const devSim = S.status ? !!(S.status.flags & 4) : null;
+  const base = devSim === null ? scoped
+    : scoped.filter((r) => r.ev || !!(r.flags & FLAG.SIMULATED) === devSim);
+  const hidden = scoped.length - base.length;
+  const all = base.filter((r) => Number.isFinite(r.z));
+  const untimed = all.filter((r) => r.t == null).length;
+  // Same time window for both plots (records without epoch are excluded)
+  let rows = all.filter((r) => r.t != null);
+  if (S.winS && rows.length) { const tEnd = rows[rows.length - 1].t; rows = rows.filter((r) => r.t >= tEnd - S.winS); }
+  $('plotNote').textContent = `${S.scope === 'session' ? '현재 세션' : '전체'} · 표시 ${rows.length.toLocaleString()}개`
+    + (untimed ? ` · 시각 미확정 ${untimed}개 제외` : '')
+    + (hidden ? ` · ${devSim ? '시뮬레이션' : '실측'} ${hidden}개 숨김` : '');
   // ---- |Z| time series (x = epoch if known, else seq*5 s) -------------------
   {
     const { g, w, h } = prepCanvas($('cvTime'));
     const pad = { l: 44, r: 10, t: 10, b: 22 };
     const tx = (r) => r.t;                   // epoch only (v0.1.6)
-    let pts = rows.filter((r) => r.t != null);
-    if (S.winS && pts.length) { const tEnd = tx(pts[pts.length - 1]); pts = pts.filter((r) => tx(r) >= tEnd - S.winS); }
+    const pts = rows;
     if (pts.length < 2) {
       g.fillStyle = css('--muted'); g.font = '13px system-ui'; g.textAlign = 'center';
       g.fillText('데이터 대기 중', w / 2, h / 2);

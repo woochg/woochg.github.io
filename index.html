@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  ArmBioZ Hydration Dashboard  v0.1.6
+  ArmBioZ Hydration Dashboard  v0.1.7
   Web Bluetooth PWA for the XIAO nRF52840 Plus + MAX30002 arm bioimpedance
   logger (PNAS 2025 reproduction). Hosted on GitHub Pages (HTTPS required).
 -->
@@ -22,7 +22,7 @@
       <span class="dot" id="connDot" aria-hidden="true"></span>
       <div>
         <h1>ArmBioZ Hydration</h1>
-        <p class="sub" id="devName">연결 안 됨 · PWA v0.1.6</p>
+        <p class="sub" id="devName">연결 안 됨 · PWA v0.1.7</p>
       </div>
     </div>
     <div class="actions">
@@ -100,7 +100,7 @@
       </figure>
       <figure class="plot">
         <canvas id="cvBiva" height="240" aria-label="R–Xc plot"></canvas>
-        <figcaption>R–Xc 평면 (BIVA형, 높이 정규화 전) · 최근 점일수록 진함</figcaption>
+        <figcaption>R–Xc 평면 (BIVA형, 높이 정규화 전) · 위 시간 창과 동일 범위 · 최근 점일수록 진함 · 회색 = settling</figcaption>
       </figure>
     </section>
 
@@ -136,7 +136,7 @@
     </section>
   </main>
 
-  <footer>ArmBioZ <span id="footVer">PWA v0.1.6</span> · Research POC, not a medical device · PNAS 122(29) e2504278122 reproduction</footer>
+  <footer>ArmBioZ <span id="footVer">PWA v0.1.7</span> · Research POC, not a medical device · PNAS 122(29) e2504278122 reproduction</footer>
   <script src="app.js"></script>
 </body>
 </html>
