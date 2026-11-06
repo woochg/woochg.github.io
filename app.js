@@ -1,5 +1,5 @@
 /* =============================================================================
- * ArmBioZ Hydration Dashboard  v0.1.4   (Web Bluetooth PWA)
+ * ArmBioZ Hydration Dashboard  v0.1.5   (Web Bluetooth PWA)
  * Version shown in the header: PWA version (this file) + firmware version
  * reported by the device in Status[7..9].
  * -----------------------------------------------------------------------------
@@ -17,7 +17,7 @@
  * ===========================================================================*/
 'use strict';
 
-const APP_VERSION = '0.1.4';
+const APP_VERSION = '0.1.5';
 const UUID = (x) => `4b1c${x}-5a1e-4b1c-9f3e-8d2c6a7b0e41`;
 const SVC = UUID('0100');
 const CH = {
@@ -428,7 +428,7 @@ class DemoLink {
   statusBytes() {
     const u8 = new Uint8Array(24); const d = this.dv(u8);
     d.setUint16(0, 3920, true); u8[2] = 78; u8[3] = this.active ? this.state : 6; u8[4] = 0; u8[5] = 0; u8[6] = 0;
-    u8[7] = 0; u8[8] = 1; u8[9] = 4;   // demo emulates fw 0.1.4 d.setUint32(10, this.uptimeS(), true); d.setUint32(14, 0, true);
+    u8[7] = 0; u8[8] = 1; u8[9] = 5;   // demo emulates fw 0.1.5 d.setUint32(10, this.uptimeS(), true); d.setUint32(14, 0, true);
     u8[18] = 4 | 8 | 32 | (this.led ? 64 : 0) | (this.epochValid ? 2 : 0) | (this.ack > 0 ? 16 : 0);
     u8[19] = 0; d.setUint16(20, this.session, true); u8[22] = this.active ? 1 : 0; u8[23] = 1;
     return this.dv(u8);
