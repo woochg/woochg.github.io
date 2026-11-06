@@ -1,5 +1,5 @@
 /* =============================================================================
- * ArmBioZ Hydration Dashboard  v0.1.5   (Web Bluetooth PWA)
+ * ArmBioZ Hydration Dashboard  v0.1.6   (Web Bluetooth PWA)
  * Version shown in the header: PWA version (this file) + firmware version
  * reported by the device in Status[7..9].
  * -----------------------------------------------------------------------------
@@ -17,7 +17,7 @@
  * ===========================================================================*/
 'use strict';
 
-const APP_VERSION = '0.1.5';
+const APP_VERSION = '0.1.6';
 const UUID = (x) => `4b1c${x}-5a1e-4b1c-9f3e-8d2c6a7b0e41`;
 const SVC = UUID('0100');
 const CH = {
@@ -184,6 +184,7 @@ const S = {
   syncInfo: null,
   rows: [],              // records of current device (sorted by seq)
   winS: 3600,
+  scope: store.get('armbioz.scope') || 'session',   // 'session' | 'all'
   ledOn: true,
   sync: null,            // {buf, crc, tries, expectEnd}
   armCirc: parseFloat(store.get('armbioz.armCirc')) || NaN,
@@ -428,8 +429,8 @@ class DemoLink {
   statusBytes() {
     const u8 = new Uint8Array(24); const d = this.dv(u8);
     d.setUint16(0, 3920, true); u8[2] = 78; u8[3] = this.active ? this.state : 6; u8[4] = 0; u8[5] = 0; u8[6] = 0;
-    u8[7] = 0; u8[8] = 1; u8[9] = 5;   // demo emulates fw 0.1.5 d.setUint32(10, this.uptimeS(), true); d.setUint32(14, 0, true);
-    u8[18] = 4 | 8 | 32 | (this.led ? 64 : 0) | (this.epochValid ? 2 : 0) | (this.ack > 0 ? 16 : 0);
+    u8[7] = 0; u8[8] = 1; u8[9] = 6;   // demo emulates fw 0.1.6 d.setUint32(10, this.uptimeS(), true); d.setUint32(14, 0, true);
+    u8[18] = 4 | 8 | 32 | (this.led ? 64 : 0) | (this.epochValid ? 2 : 0) | (this.active && this.state === 3 ? 16 : 0);
     u8[19] = 0; d.setUint16(20, this.session, true); u8[22] = this.active ? 1 : 0; u8[23] = 1;
     return this.dv(u8);
   }
@@ -563,7 +564,14 @@ function sessionStartIndex() {   // last START / RESUME / BASELINE RESET
   }
   return 0;
 }
+function sessionRows() {        // rows of the current (last started) session
+  const s0 = sessionStartIndex();
+  return S.rows.slice(s0);
+}
 function baselineZ0() {         // 5-min median right after settling (Eq.2)
+  // Only meaningful once the device itself has a baseline (Status flag b4);
+  // otherwise old sessions / simulator data would be used (v0.1.6 fix).
+  if (S.status && !(S.status.flags & 16)) return NaN;
   const s0 = sessionStartIndex();
   const rel = S.rows.slice(s0).findIndex(usable);
   const first = rel < 0 ? -1 : s0 + rel;
@@ -655,14 +663,25 @@ function axes(g, w, h, pad, x0, x1, y0, y1, xfmt, yfmt) {
   }
 }
 
+function yFmt(span) { return span < 2 ? 2 : span < 20 ? 1 : 0; }
+function padRange(a, b, minSpan) {   // margin + minimum span, centred
+  let lo = a, hi = b;
+  if (hi - lo < minSpan) { const c = (hi + lo) / 2; lo = c - minSpan / 2; hi = c + minSpan / 2; }
+  const m = (hi - lo) * 0.08; return [lo - m, hi + m];
+}
+
 function renderPlots() {
-  const rows = S.rows.filter((r) => Number.isFinite(r.z));
+  const base = S.scope === 'session' ? sessionRows() : S.rows;
+  const rows = base.filter((r) => Number.isFinite(r.z));
+  const untimed = rows.filter((r) => r.t == null).length;
+  $('plotNote').textContent = `${S.scope === 'session' ? '현재 세션' : '전체'} · ${rows.length.toLocaleString()}개`
+    + (untimed ? ` · 시각 미확정 ${untimed}개는 시계열에서 제외` : '');
   // ---- |Z| time series (x = epoch if known, else seq*5 s) -------------------
   {
     const { g, w, h } = prepCanvas($('cvTime'));
     const pad = { l: 44, r: 10, t: 10, b: 22 };
-    const tx = (r) => (r.t != null ? r.t : r.seq * 5);
-    let pts = rows;
+    const tx = (r) => r.t;                   // epoch only (v0.1.6)
+    let pts = rows.filter((r) => r.t != null);
     if (S.winS && pts.length) { const tEnd = tx(pts[pts.length - 1]); pts = pts.filter((r) => tx(r) >= tEnd - S.winS); }
     if (pts.length < 2) {
       g.fillStyle = css('--muted'); g.font = '13px system-ui'; g.textAlign = 'center';
@@ -670,13 +689,12 @@ function renderPlots() {
     } else {
       const xs = pts.map(tx); const zs = pts.map((r) => r.z);
       const x0 = xs[0], x1 = xs[xs.length - 1] || x0 + 1;
-      let y0 = Math.min(...zs), y1 = Math.max(...zs); const m = (y1 - y0) * 0.08 || 1; y0 -= m; y1 += m;
+      let [y0, y1] = padRange(Math.min(...zs), Math.max(...zs), 0.5);
+      const yd = yFmt(y1 - y0);
       const X = (v) => pad.l + (w - pad.l - pad.r) * (v - x0) / ((x1 - x0) || 1);
       const Y = (v) => h - pad.b - (h - pad.t - pad.b) * (v - y0) / (y1 - y0);
-      const hasT = pts[0].t != null;
-      axes(g, w, h, pad, x0, x1, y0, y1,
-        (v) => (hasT ? hm(new Date(v * 1000)) : `${Math.round((v - x0) / 60)}m`),
-        (v) => v.toFixed(1));
+      const tf = (x1 - x0) < 900 ? hms : hm;    // < 15 min span: show seconds
+      axes(g, w, h, pad, x0, x1, y0, y1, (v) => tf(new Date(v * 1000)), (v) => v.toFixed(yd));
       // raw points
       for (const r of pts) {
         g.fillStyle = usable(r) ? css('--plot-line') : css('--plot-grey');
@@ -694,7 +712,7 @@ function renderPlots() {
       g.stroke();
       // event markers (vertical lines + short labels)
       const tEnd = xs[xs.length - 1], tStart = xs[0];
-      const marks = S.rows.filter((r) => r.ev && tx(r) >= tStart && tx(r) <= tEnd);
+      const marks = base.filter((r) => r.ev && r.t != null && tx(r) >= tStart && tx(r) <= tEnd);
       g.font = '10px system-ui'; g.textAlign = 'left'; g.textBaseline = 'top';
       marks.slice(-40).forEach((r, i) => {
         const x = X(tx(r));
@@ -716,21 +734,24 @@ function renderPlots() {
   // ---- R–Xc plane ----------------------------------------------------------
   {
     const { g, w, h } = prepCanvas($('cvBiva'));
-    const pad = { l: 44, r: 10, t: 10, b: 22 };
-    const pts = rows.filter(usable).slice(-2000);
+    const pad = { l: 44, r: 26, t: 10, b: 22 };
+    // current scope incl. settling points (grey) so a new session is visible
+    const pts = rows.filter((r) => !(r.flags & FLAG.LEAD_OFF)).slice(-2000);
     if (pts.length < 2) {
       g.fillStyle = css('--muted'); g.font = '13px system-ui'; g.textAlign = 'center';
       g.fillText('R–Xc: 데이터 대기 중', w / 2, h / 2);
       return;
     }
-    let x0 = Math.min(...pts.map((r) => r.r)), x1 = Math.max(...pts.map((r) => r.r));
-    let y0 = Math.min(...pts.map((r) => r.xc)), y1 = Math.max(...pts.map((r) => r.xc));
-    const mx = (x1 - x0) * 0.1 || 1, my = (y1 - y0) * 0.1 || 1; x0 -= mx; x1 += mx; y0 -= my; y1 += my;
-    axes(g, w, h, pad, x0, x1, y0, y1, (v) => `R ${v.toFixed(0)}`, (v) => v.toFixed(1));
+    const [x0, x1] = padRange(Math.min(...pts.map((r) => r.r)), Math.max(...pts.map((r) => r.r)), 1);
+    const [y0, y1] = padRange(Math.min(...pts.map((r) => r.xc)), Math.max(...pts.map((r) => r.xc)), 1);
+    const xd = yFmt(x1 - x0), yd = yFmt(y1 - y0);
+    axes(g, w, h, pad, x0, x1, y0, y1, (v) => `R ${v.toFixed(xd)}`, (v) => v.toFixed(yd));
     const X = (v) => pad.l + (w - pad.l - pad.r) * (v - x0) / (x1 - x0);
     const Y = (v) => h - pad.b - (h - pad.t - pad.b) * (v - y0) / (y1 - y0);
-    g.fillStyle = css('--plot-line');
-    pts.forEach((r, i) => { g.globalAlpha = 0.15 + 0.85 * (i / pts.length); g.beginPath(); g.arc(X(r.r), Y(r.xc), 2, 0, 6.283); g.fill(); });
+    pts.forEach((r, i) => {
+      g.fillStyle = usable(r) ? css('--plot-line') : css('--plot-grey');
+      g.globalAlpha = 0.15 + 0.85 * (i / pts.length); g.beginPath(); g.arc(X(r.r), Y(r.xc), 2, 0, 6.283); g.fill();
+    });
     g.globalAlpha = 1;
     const last = pts[pts.length - 1];
     g.strokeStyle = css('--plot-median'); g.lineWidth = 2; g.beginPath(); g.arc(X(last.r), Y(last.xc), 5, 0, 6.283); g.stroke();
@@ -799,10 +820,17 @@ function bind() {
   };
   $('btnCopyLog').onclick = () => navigator.clipboard.writeText(logLines.join('\n')).then(() => log('log copied'));
   $('btnClearLog').onclick = () => { logLines.length = 0; $('log').textContent = ''; };
-  document.querySelectorAll('.tab').forEach((b) => (b.onclick = () => {
-    document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('active', x === b));
+  document.querySelectorAll('.tab[data-win]').forEach((b) => (b.onclick = () => {
+    document.querySelectorAll('.tab[data-win]').forEach((x) => x.classList.toggle('active', x === b));
     S.winS = +b.dataset.win; renderPlots();
   }));
+  document.querySelectorAll('.tab[data-scope]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.scope === S.scope);
+    b.onclick = () => {
+      document.querySelectorAll('.tab[data-scope]').forEach((x) => x.classList.toggle('active', x === b));
+      S.scope = b.dataset.scope; store.set('armbioz.scope', S.scope); renderPlots();
+    };
+  });
   const inC = $('inArmCirc'), inH = $('inHeight');
   if (Number.isFinite(S.armCirc)) inC.value = S.armCirc;
   if (Number.isFinite(S.height)) inH.value = S.height;

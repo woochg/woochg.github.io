@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  ArmBioZ Hydration Dashboard  v0.1.5
+  ArmBioZ Hydration Dashboard  v0.1.6
   Web Bluetooth PWA for the XIAO nRF52840 Plus + MAX30002 arm bioimpedance
   logger (PNAS 2025 reproduction). Hosted on GitHub Pages (HTTPS required).
 -->
@@ -22,7 +22,7 @@
       <span class="dot" id="connDot" aria-hidden="true"></span>
       <div>
         <h1>ArmBioZ Hydration</h1>
-        <p class="sub" id="devName">연결 안 됨 · PWA v0.1.5</p>
+        <p class="sub" id="devName">연결 안 됨 · PWA v0.1.6</p>
       </div>
     </div>
     <div class="actions">
@@ -89,7 +89,11 @@
         <button data-win="21600" class="tab">6 h</button>
         <button data-win="86400" class="tab">24 h</button>
         <button data-win="0" class="tab">All</button>
+        <span class="tab-sep"></span>
+        <button data-scope="session" class="tab">현재 세션</button>
+        <button data-scope="all" class="tab">전체 세션</button>
       </div>
+      <p class="meta" id="plotNote"></p>
       <figure class="plot">
         <canvas id="cvTime" height="220" aria-label="|Z| time series"></canvas>
         <figcaption>|Z|(t) · 5-min median (굵은 선) · 회색 = settling/lead-off · 세로선 = 세션(실선)/이벤트(점선) · 주황 점선 = Z₀</figcaption>
@@ -132,7 +136,7 @@
     </section>
   </main>
 
-  <footer>ArmBioZ <span id="footVer">PWA v0.1.5</span> · Research POC, not a medical device · PNAS 122(29) e2504278122 reproduction</footer>
+  <footer>ArmBioZ <span id="footVer">PWA v0.1.6</span> · Research POC, not a medical device · PNAS 122(29) e2504278122 reproduction</footer>
   <script src="app.js"></script>
 </body>
 </html>

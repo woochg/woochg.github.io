@@ -1,4 +1,4 @@
-/* ArmBioZ Hydration Dashboard v0.1.5 — mobile-first, light/dark */
+/* ArmBioZ Hydration Dashboard v0.1.6 — mobile-first, light/dark */
 :root {
   --bg: #f4f6f5;
   --card: #ffffff;
@@ -114,3 +114,5 @@ footer { text-align: center; color: var(--muted); font-size: .72rem; padding: 12
 button.big { min-height: 48px; min-width: 120px; font-size: 1rem; font-weight: 600; }
 .meta.label { margin: .8rem 0 .4rem; }
 .evbtn { min-height: 36px; padding: .3rem .7rem; }
+
+.tab-sep { width: 1px; height: 24px; background: var(--line); margin: 0 .3rem; }
