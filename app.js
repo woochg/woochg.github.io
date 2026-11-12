@@ -57,6 +57,7 @@ const MEDIAN_WIN_S = 300;
 // device only advances its ACK pointer after a sync burst.
 const AUTO_SYNC_MIN_RECORDS = 60;        // ~5 min of data
 const AUTO_SYNC_MIN_GAP_MS  = 60000;
+const BACKGROUND_IDLE_MS = 60000;
 
 /* ---------------------------------------------------------------- utilities */
 // localStorage may be missing or throw (private mode, blocked site data).
@@ -191,7 +192,11 @@ const S = {
   scope: store.get('armbioz.scope') || 'session',   // 'session' | 'all'
   lastAutoSync: 0,
   ledOn: true,
-  sync: null,            // {buf, crc, tries, expectEnd}
+  sync: null,            // active run, including storage + ACK
+  syncStarting: null,    // run reserved before the first await
+  ready: false,
+  hideTimer: null,
+  syncTimer: null,
   armCirc: parseFloat(store.get('armbioz.armCirc')) || NaN,
   height: parseFloat(store.get('armbioz.height')) || NaN,
 };
@@ -303,12 +308,20 @@ function onWindow(dv) {
       count: d.getUint32(4, true), first: d.getUint32(8, true),
       last: d.getUint32(12, true), crc: d.getUint32(16, true),
     };
-    finishBurst(end).catch((e) => log(`sync error: ${e.message}`, 'err'));
+    if (sy.finishing) return;
+    sy.finishing = true;
+    finishBurst(end).catch((e) => {
+      if (!isCurrentSync(sy)) return;
+      log(`sync error: ${e.message}`, 'err');
+      endSync();
+    });
   }
 }
 
 async function finishBurst(end) {
   const sy = S.sync;
+  if (!sy || !isCurrentSync(sy)) return;
+  const link = sy.link;
   const ok = !sy.bad && end.count === sy.buf.length && end.crc === sy.crc;
   if (end.count === 0) {
     log('sync: 미동기 데이터 없음');
@@ -318,19 +331,21 @@ async function finishBurst(end) {
   if (!ok) {
     sy.tries += 1;
     log(`sync verify FAIL (got ${sy.buf.length}/${end.count}, crc ${sy.crc.toString(16)} vs ${end.crc.toString(16)}) → NACK #${sy.tries}`, 'warn');
-    if (sy.tries > 3) { log('sync aborted after 3 retries', 'err'); await S.link.write([OP.ABORT]); endSync(); return; }
+    if (sy.tries > 3) { log('sync aborted after 3 retries', 'err'); await link.write([OP.ABORT]); if (isCurrentSync(sy)) endSync(); return; }
     const from = sy.firstBad ?? end.first;
     // Keep verified records before `from`: the device re-sends [from..last]
     // as a new burst with its own END/CRC, and the final ACK covers both.
     sy.kept = sy.kept.concat(sy.buf.filter((r) => r.seq < from));
     resetBurst();
-    await S.link.write([OP.NACK, ...u32(from)]);
+    await link.write([OP.NACK, ...u32(from)]);
     return;
   }
   const rows = sy.kept.concat(sy.buf).map(toRow);
   await DB.putMany(rows);
+  if (!isCurrentSync(sy)) return;
   rows.forEach(upsertRow);
-  await S.link.write([OP.ACK, ...u32(end.last)]);
+  await link.write([OP.ACK, ...u32(end.last)]);
+  if (!isCurrentSync(sy)) return;
   const dt = (Date.now() - sy.t0) / 1000;
   log(`sync OK: ${rows.length} records (…#${end.last}) ${dt.toFixed(1)} s, ${(rows.length * 20 / 1024 / Math.max(dt, 0.001)).toFixed(1)} KiB/s → ACK`);
   endSync();
@@ -338,32 +353,71 @@ async function finishBurst(end) {
   renderData();
 }
 
-function resetBurst() { Object.assign(S.sync, { buf: [], crc: 0, bad: false, firstBad: null }); }
+function resetBurst() { Object.assign(S.sync, { buf: [], crc: 0, bad: false, firstBad: null, finishing: false }); }
+function isCurrentSync(run) {
+  return S.link === run.link && (S.sync === run || S.syncStarting === run);
+}
+
+function clearBackgroundDisconnect() {
+  clearTimeout(S.hideTimer);
+  S.hideTimer = null;
+}
+
+function scheduleBackgroundDisconnect() {
+  clearBackgroundDisconnect();
+  if (!document.hidden || !S.link || S.sync || S.syncStarting) return;
+  const link = S.link;
+  S.hideTimer = setTimeout(() => {
+    S.hideTimer = null;
+    // Check at execution time too: sync may have started after scheduling.
+    if (!document.hidden || S.link !== link || S.sync || S.syncStarting) return;
+    log('background → disconnect (power save)');
+    link.disconnect();
+  }, BACKGROUND_IDLE_MS);
+}
+
 function endSync() {
+  clearTimeout(S.syncTimer);
+  S.syncTimer = null;
+  S.syncStarting = null;
   S.sync = null;
   $('syncProg').hidden = true;
   $('connDot').classList.remove('busy');
   $('btnSync').disabled = !S.link;
+  scheduleBackgroundDisconnect();
 }
 const u32 = (v) => [v & 0xff, (v >>> 8) & 0xff, (v >>> 16) & 0xff, (v >>> 24) & 0xff];
 
 async function startSync() {
   if (!S.link || S.sync || S.syncStarting) return;   // one burst at a time
-  S.syncStarting = true;
-  let info;
-  try { info = await S.link.readSyncInfo(); } finally { S.syncStarting = false; }
-  if (S.sync) return;
-  if (info) onSyncInfo(info);
-  const expect = S.syncInfo ? S.syncInfo.unsynced : 0;
-  S.sync = { buf: [], kept: [], crc: 0, bad: false, firstBad: null, tries: 0, expect, t0: Date.now() };
-  $('btnSync').disabled = true;
-  $('connDot').classList.add('busy');
-  showProgress(0, expect);
-  log(`sync start: unsynced=${expect}, MTU=${S.syncInfo ? S.syncInfo.mtu : '?'}, ${S.syncInfo ? S.syncInfo.rpp : '?'} rec/pkt`);
-  await S.link.write([OP.START, 0, 0]);
-  // Safety net: device aborts on stall/ack timeout; mirror it here.
-  const myRun = S.sync;
-  setTimeout(() => { if (S.sync === myRun) { log('sync timeout', 'warn'); endSync(); } }, 120000);
+  const link = S.link;
+  const run = { link, buf: [], kept: [], crc: 0, bad: false, firstBad: null,
+    tries: 0, expect: 0, t0: Date.now(), finishing: false };
+  S.syncStarting = run;
+  clearBackgroundDisconnect();
+  // Cover readSyncInfo, START, receive, local persistence and ACK waits.
+  S.syncTimer = setTimeout(() => {
+    if (!isCurrentSync(run)) return;
+    log('sync timeout', 'warn');
+    endSync();
+  }, 120000);
+  try {
+    const info = await link.readSyncInfo();
+    if (!isCurrentSync(run)) return;
+    // Keep the reservation while onSyncInfo calls maybeAutoSync.
+    if (info) onSyncInfo(info);
+    run.expect = S.syncInfo ? S.syncInfo.unsynced : 0;
+    S.sync = run;
+    S.syncStarting = null;
+    $('btnSync').disabled = true;
+    $('connDot').classList.add('busy');
+    showProgress(0, run.expect);
+    log(`sync start: unsynced=${run.expect}, MTU=${S.syncInfo ? S.syncInfo.mtu : '?'}, ${S.syncInfo ? S.syncInfo.rpp : '?'} rec/pkt`);
+    await link.write([OP.START, 0, 0]);
+  } catch (e) {
+    if (isCurrentSync(run)) endSync();
+    throw e;
+  }
 }
 
 function showProgress(n, total) {
@@ -384,7 +438,9 @@ class BleLink {
       filters: [{ namePrefix: 'ArmBioZ' }, { services: [SVC] }],
       optionalServices: [SVC, 'battery_service', 'device_information'],
     });
-    this.device.addEventListener('gattserverdisconnected', () => onDisconnected());
+    this.device.addEventListener('gattserverdisconnected', () => {
+      if (S.link === this) onDisconnected();
+    });
     log(`connecting to ${this.device.name || this.device.id} …`);
     this.server = await this.device.gatt.connect();
     const svc = await this.server.getPrimaryService(SVC);
@@ -511,13 +567,17 @@ class DemoLink {
       default: break;
     }
   }
-  disconnect() { clearInterval(this.timer); setTimeout(onDisconnected, 50); }
+  disconnect() {
+    clearInterval(this.timer);
+    setTimeout(() => { if (S.link === this) onDisconnected(); }, 50);
+  }
 }
 
 /* --------------------------------------------------- connect / disconnect */
 async function connect(demo) {
+  const link = demo ? new DemoLink() : new BleLink();
+  S.ready = false;
   try {
-    const link = demo ? new DemoLink() : new BleLink();
     const name = await link.connect();
     S.link = link;
     S.dev = name;
@@ -536,18 +596,21 @@ async function connect(demo) {
     log('time synchronised');
     await loadRows();
     if (S.syncInfo && S.syncInfo.unsynced > 0) await startSync();   // auto high-speed sync
+    if (S.link !== link) return;
     S.ready = true;                                                   // enables periodic auto-sync
+    scheduleBackgroundDisconnect();
   } catch (e) {
     log(`connect failed: ${e.message}`, 'err');
-    S.link = null;
+    if (S.link === link) { link.disconnect(); onDisconnected(); }
   }
 }
 
 function onDisconnected() {
   S.ready = false;
-  log('disconnected', 'warn');
-  if (S.sync) endSync();
   S.link = null;
+  clearBackgroundDisconnect();
+  log('disconnected', 'warn');
+  endSync();
   $('connDot').classList.remove('on', 'busy');
   for (const id of ['btnDisconnect', 'btnSync', 'btnLed', 'btnBaseline']) $(id).disabled = true;
   $('btnConnect').disabled = !navigator.bluetooth; $('btnDemo').disabled = false;
@@ -867,13 +930,9 @@ function bind() {
   inH.onchange = () => { S.height = parseFloat(inH.value); store.set('armbioz.height', inH.value); };
   let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(renderPlots, 150); });
   matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', renderPlots);
-  // Web Bluetooth only works in the foreground; release the link when hidden
-  // long enough to save device power (design 7.5).
-  let hideTimer;
-  document.addEventListener('visibilitychange', () => {
-    clearTimeout(hideTimer);
-    if (document.hidden && S.link && !S.sync) hideTimer = setTimeout(() => { log('background → disconnect (power save)'); S.link && S.link.disconnect(); }, 60000);
-  });
+  // Background execution depends on browser/OS policy. Release an idle link
+  // after 60 s; startSync/endSync maintain this policy across async work.
+  document.addEventListener('visibilitychange', scheduleBackgroundDisconnect);
 }
 
 async function main() {
